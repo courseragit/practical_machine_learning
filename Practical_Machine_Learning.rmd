@@ -1,0 +1,121 @@
+## Executive Summary
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+## Data
+The training data for this project are available here:
+**https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv**
+
+The test data are available here:
+**https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv**
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+## What you should submit
+The goal of your project is to predict the manner in which they did the exercise. This is the “classe” variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+Your submission should consist of a link to a Github repo with your R markdown and compiled HTML file describing your analysis. Please constrain the text of the writeup to < 2000 words and the number of figures to be less than 5. It will make it easier for the graders if you submit a repo with a gh-pages branch so the HTML page can be viewed online (and you always want to make it easy on graders :-).
+You should also apply your machine learning algorithm to the 20 test cases available in the test data above. Please submit your predictions in appropriate format to the programming assignment for automated grading. See the programming assignment for additional details.
+## Reproducibility
+Due to security concerns with the exchange of R code, your code will not be run during the evaluation by your classmates. Please be sure that if they download the repo, they will be able to view the compiled HTML version of your analysis.
+
+### Loading libraries, and downloading the simulation data.
+```{r}
+library(ggplot2)
+library(data.table)
+library(caret)
+library(randomForest)
+library(rattle)
+library(RColorBrewer)
+library(rpart)
+library(rpart.plot)
+require(parallel)
+require(doParallel)
+
+url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+Data <- fread(url)
+
+url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+TestData <- fread(url)
+``` 
+**Model Build and selection below**
+**Our initial model includes all the data. We will shape our conclusion by using just the belt, arm, dumbbell, and forearm variables that are not missing values as our predictors.**
+```{r}
+isMissing <- sapply(TestData, function (x) any(is.na(x) | x == ""))
+Prediction <- !isMissing & grepl("belt|[^(fore)]arm|dumbbell|forearm", names(isMissing))
+isCandidate <- names(isMissing)[Prediction]
+isCandidate
+```
+**Subsetting the data to only include the predictors.**
+```{r}
+isIncluded <- c("classe", isCandidate)
+Data <- Data[, isIncluded, with=FALSE]
+dim(Data)
+```
+**Making classe into a factor**
+```{r}
+Data <- Data[, classe := factor(Data[, classe])]
+Data[, .N, classe]
+```
+
+### Next, we split our data 60% training and 40% for testing. We also do some partitioning, scaling and some verification.
+```{r}
+set.seed(1500)
+inTrain <- createDataPartition(Data$classe, p=0.6)
+DataTrain <- Data[inTrain[[1]]]
+DataTest <- Data[-inTrain[[1]]]
+```
+#### Pre-process the data via centering and scaling.
+```{r}
+X <- DataTrain[, isCandidate, with=FALSE]
+procData <- preProcess(X)
+procData
+Z <- predict(procData, X)
+DataTrainCS <- data.table(data.frame(classe = DataTrain[, classe], Z))
+```
+#### Center and Scale the test data
+```{r}
+var <- DataTest[, isCandidate, with=FALSE]
+Z <- predict(procData, var)
+DataTestCS <- data.table(data.frame(classe = DataTest[, classe], Z))
+```
+#### Examine for near-zero variables.
+```{r}
+nzv <- nearZeroVar(DataTrainCS, saveMetrics=TRUE)
+if (any(nzv$nzv)) nzv else message("Data is clean")
+```
+### Training our models for comparison against each other to determine the best fit for prediction.
+#### We will be defining two seperate models in order to compare the accuracy and to help us better understand the data and ensure we have confidence in our predictions.
+
+### First, let's examine the results using a decision tree
+```{r}
+model1 <- rpart( classe ~ .,  data=DataTrain, method="class" )
+fancyRpartPlot( model1 )
+```
+#### Below we examine the Prediction which shows us an accuracy rate of only ~ 75%. Not bad, but there is room for improvement. Let's attempt the prediction with our second model.
+```{r}
+predictions1 <- predict( model1, DataTrain, type = "class" )
+confusionMatrix( predictions1, DataTrain$classe )
+```
+### Out of sample error comes in at ~ 25%
+```{r}
+outOfSampleError <- 1 - as.numeric(confusionMatrix(DataTrain$classe, predictions1)$overall[1])
+outOfSampleError
+```
+### Let's re-examine the same data using Random Forest to better our accuracy. Random Forest vaults our accuracy to 99%
+```{r}
+model2 <- randomForest( classe ~. , data=DataTrain)
+predictions2 <- predict( model2, DataTrain, type = "class" )
+confusionMatrix( predictions2, DataTrain$classe )
+```
+### Out of sample error comes in nearly perfect(rounded)
+```{r}
+outOfSampleError <- 1 - as.numeric(confusionMatrix(DataTrain$classe, predictions2)$overall[1])
+outOfSampleError
+```
+### Based on the comparison of the two models, we clearly prefer Random Forest. Our confidence in this model is high for predicting the outcome.
+```{r}
+train <- randomForest(DataTrain$classe ~.,data = DataTrain,importance = TRUE)
+train_prediction<-predict(train,TestData)
+hat <- train_prediction
+TestData <- cbind(hat , TestData)
+subset(TestData, select=names(TestData)[grep("belt|[^(fore)]arm|dumbbell|forearm", names(TestData), invert=TRUE)])
+```
+
+
